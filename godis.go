@@ -6,8 +6,15 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+)
+
+type MergeMode string
+const (
+	ModeReplace MergeMode = "replace"
+	ModeMerge   MergeMode = "merge"
 )
 
 // Config holds all configuration options
@@ -16,6 +23,8 @@ type Config struct {
 	ChannelID string `yaml:"channel_id"`
 	ServerID  string `yaml:"server_id"`
 	Username  string `yaml:"username"`
+	Tags      []string `yaml:"tags"`
+	Properties map[string]string `yaml:"properties"`
 }
 
 type CLI struct {
@@ -26,6 +35,11 @@ type CLI struct {
 	channelID   string
 	serverID    string
 	username    string
+	tags            string
+	tagMode         string
+	properties      string
+	propertyMode    string
+	flags       *flag.FlagSet
 }
 
 func NewCLI() *CLI {
@@ -35,29 +49,67 @@ func NewCLI() *CLI {
 		os.Exit(1)
 	}
 
-	return &CLI{
+	cli := &CLI{
 		configPath: filepath.Join(homeDir, ".config", "godis"),
+		flags:      flag.NewFlagSet("godis", flag.ExitOnError),
 	}
+
+	return cli
 }
 
-func (c *CLI) parseFlags() {
+func (c *CLI) parseFlags(args []string) error {
 	// Define flags with long and short versions
-	flag.StringVar(&c.configFile, "config", "default.yaml", "Config file to use")
-	flag.StringVar(&c.configFile, "c", "default.yaml", "Config file to use (shorthand)")
+	c.flags.StringVar(&c.configFile, "config", "default.yaml", "Config file to use")
+	c.flags.StringVar(&c.configFile, "c", "default.yaml", "Config file to use (shorthand)")
 	
-	flag.StringVar(&c.token, "token", "", "Discord bot token")
-	flag.StringVar(&c.token, "t", "", "Discord bot token (shorthand)")
+	c.flags.StringVar(&c.token, "token", "", "Discord bot token")
+	c.flags.StringVar(&c.token, "t", "", "Discord bot token (shorthand)")
 	
-	flag.StringVar(&c.channelID, "channel", "", "Discord channel ID")
-	flag.StringVar(&c.channelID, "ch", "", "Discord channel ID (shorthand)")
+	c.flags.StringVar(&c.channelID, "channel", "", "Discord channel ID")
+	c.flags.StringVar(&c.channelID, "ch", "", "Discord channel ID (shorthand)")
 	
-	flag.StringVar(&c.serverID, "server", "", "Discord server ID")
-	flag.StringVar(&c.serverID, "s", "", "Discord server ID (shorthand)")
+	c.flags.StringVar(&c.serverID, "server", "", "Discord server ID")
+	c.flags.StringVar(&c.serverID, "s", "", "Discord server ID (shorthand)")
 	
-	flag.StringVar(&c.username, "username", "", "Bot username")
-	flag.StringVar(&c.username, "u", "", "Bot username (shorthand)")
+	c.flags.StringVar(&c.username, "username", "", "Bot username")
+	c.flags.StringVar(&c.username, "u", "", "Bot username (shorthand)")
 
-	flag.Parse()
+	c.flags.StringVar(&c.tags, "tags", "", "Comma-separated tags")
+	c.flags.StringVar(&c.tagMode, "tag-mode", "merge", "Tag handling mode (merge|replace)")
+	
+	c.flags.StringVar(&c.properties, "properties", "", "Properties in key:value;key2:value2 format")
+	c.flags.StringVar(&c.propertyMode, "property-mode", "merge", "Property handling mode (merge|replace)")
+
+
+	return c.flags.Parse(args)
+}
+
+func (c *CLI) parseTags(tagStr string) []string {
+	if tagStr == "" {
+		return nil
+	}
+	tags := strings.Split(tagStr, ",")
+	// Trim spaces from each tag
+	for i, tag := range tags {
+		tags[i] = strings.TrimSpace(tag)
+	}
+	return tags
+}
+
+func (c *CLI) parseProperties(propStr string) map[string]string {
+	props := make(map[string]string)
+	if propStr == "" {
+		return props
+	}
+	
+	pairs := strings.Split(propStr, ";")
+	for _, pair := range pairs {
+		kv := strings.Split(strings.TrimSpace(pair), ":")
+		if len(kv) == 2 {
+			props[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+		}
+	}
+	return props
 }
 
 func (c *CLI) loadConfig() error {
@@ -123,11 +175,52 @@ func (c *CLI) mergeFlags() {
 	if c.username != "" {
 		c.config.Username = c.username
 	}
+
+	if c.tags != "" {
+		newTags := c.parseTags(c.tags)
+		if c.tagMode == string(ModeReplace) {
+			c.config.Tags = newTags
+		} else { // merge mode
+			// Create a map for deduplication
+			tagMap := make(map[string]bool)
+			for _, t := range c.config.Tags {
+				tagMap[t] = true
+			}
+			for _, t := range newTags {
+				tagMap[t] = true
+			}
+			// Convert back to slice
+			c.config.Tags = make([]string, 0, len(tagMap))
+			for t := range tagMap {
+				c.config.Tags = append(c.config.Tags, t)
+			}
+		}
+	}
+
+	// Handle properties
+	if c.properties != "" {
+		newProps := c.parseProperties(c.properties)
+		if c.propertyMode == string(ModeReplace) {
+			c.config.Properties = newProps
+		} else { // merge mode
+			if c.config.Properties == nil {
+				c.config.Properties = make(map[string]string)
+			}
+			for k, v := range newProps {
+				c.config.Properties[k] = v
+			}
+		}
+	}
+
+
 }
 
 func main() {
-	cli := NewCLI()
-	cli.parseFlags()
+		cli := NewCLI()
+		if err := cli.parseFlags(os.Args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+			os.Exit(1)
+		}
 
 	err := cli.loadConfig()
 	if err != nil {
@@ -145,3 +238,4 @@ func main() {
 	fmt.Printf("Server ID: %s\n", cli.config.ServerID)
 	fmt.Printf("Username: %s\n", cli.config.Username)
 }
+
