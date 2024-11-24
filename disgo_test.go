@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -238,5 +241,237 @@ func TestPropertyHandling(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStdinHandlingWithPassthrough(t *testing.T) {
+	// Create a pipe to simulate stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+			t.Fatalf("Failed to create pipe: %v", err)
+	}
+
+	// Create a pipe for capturing stdout
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+			t.Fatalf("Failed to create stdout pipe: %v", err)
+	}
+
+	// Save original stdin and stdout
+	oldStdin := os.Stdin
+	oldStdout := os.Stdout
+	defer func() {
+			os.Stdin = oldStdin
+			os.Stdout = oldStdout
+	}()
+
+	// Set the pipes
+	os.Stdin = r
+	os.Stdout = stdoutW
+
+	// Test data to write
+	testData := []byte("test input data\n")
+
+	// Create a channel to collect output
+	outputChan := make(chan []byte)
+	
+	// Start goroutine to read from stdout pipe
+	go func() {
+			var buf bytes.Buffer
+			io.Copy(&buf, stdoutR)
+			outputChan <- buf.Bytes()
+	}()
+
+	// Write test data and close pipe
+	go func() {
+			w.Write(testData)
+			w.Close()
+	}()
+
+	// Run with passthrough enabled
+	cli := NewCLI()
+	cli.parseFlags([]string{"--passthrough"})
+	cli.readStdin()
+	cli.config.Passthrough = true
+
+	// Write to stdout if passthrough enabled
+	if cli.config.Passthrough && len(cli.stdinData) > 0 {
+			os.Stdout.Write(cli.stdinData)
+	}
+
+	// Close stdout pipe to signal completion
+	stdoutW.Close()
+
+	// Get the captured output
+	output := <-outputChan
+
+	// Verify the output matches input when passthrough is enabled
+	if !bytes.Equal(output, testData) {
+			t.Errorf("Passthrough output mismatch:\nexpected: %q\ngot: %q", testData, output)
+	}
+}
+
+func TestStdinHandlingWithoutPassthrough(t *testing.T) {
+	// Create a pipe to simulate stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+			t.Fatalf("Failed to create pipe: %v", err)
+	}
+
+	// Create a pipe for capturing stdout
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+			t.Fatalf("Failed to create stdout pipe: %v", err)
+	}
+
+	// Save original stdin and stdout
+	oldStdin := os.Stdin
+	oldStdout := os.Stdout
+	defer func() {
+			os.Stdin = oldStdin
+			os.Stdout = oldStdout
+	}()
+
+	// Set the pipes
+	os.Stdin = r
+	os.Stdout = stdoutW
+
+	// Test data to write
+	testData := []byte("test input data\n")
+
+	// Create a channel to collect output
+	outputChan := make(chan []byte)
+	
+	// Start goroutine to read from stdout pipe
+	go func() {
+			var buf bytes.Buffer
+			io.Copy(&buf, stdoutR)
+			outputChan <- buf.Bytes()
+	}()
+
+	// Write test data and close pipe
+	go func() {
+			w.Write(testData)
+			w.Close()
+	}()
+
+	// Run without passthrough
+	cli := NewCLI()
+	cli.readStdin()
+	
+	// Should not write to stdout as passthrough is disabled
+	if cli.config.Passthrough && len(cli.stdinData) > 0 {
+			os.Stdout.Write(cli.stdinData)
+	}
+
+	// Close stdout pipe to signal completion
+	stdoutW.Close()
+
+	// Get the captured output
+	output := <-outputChan
+
+	// Verify no output when passthrough is disabled
+	if len(output) > 0 {
+			t.Errorf("Expected no output without passthrough, got: %q", output)
+	}
+
+	// Verify data was still read
+	if !bytes.Equal(cli.stdinData, testData) {
+			t.Errorf("Stdin data mismatch:\nexpected: %q\ngot: %q", testData, cli.stdinData)
+	}
+}
+func TestEffectiveMaxMessageSize(t *testing.T) {
+	testCases := []struct {
+			name           string
+			configSize     int
+			expectedSize   int
+	}{
+			{
+					name:         "Zero size falls back to default",
+					configSize:   0,
+					expectedSize: DefaultMaxMessageSize,
+			},
+			{
+					name:         "Negative size falls back to default",
+					configSize:   -1,
+					expectedSize: DefaultMaxMessageSize,
+			},
+			{
+					name:         "Valid size is used",
+					configSize:   1000,
+					expectedSize: 1000,
+			},
+			{
+					name:         "Default size when not set",
+					configSize:   0,
+					expectedSize: DefaultMaxMessageSize,
+			},
+	}
+
+	for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+					cli := NewCLI()
+					cli.config.MaxMessageSize = tc.configSize
+
+					size := cli.getEffectiveMaxMessageSize()
+					if size != tc.expectedSize {
+							t.Errorf("Expected size %d, got %d", tc.expectedSize, size)
+					}
+
+					// Test message splitting with this size
+					longMessage := strings.Repeat("a", tc.expectedSize + 100)
+					messages := cli.splitMessage(longMessage)
+					
+					// Verify no message exceeds the effective max size
+					for i, msg := range messages {
+							if len(msg) > tc.expectedSize {
+									t.Errorf("Message part %d exceeds max size: %d > %d", 
+											i, len(msg), tc.expectedSize)
+							}
+					}
+			})
+	}
+}
+
+func TestMessageModeHandling(t *testing.T) {
+	testCases := []struct {
+			name        string
+			mode        string
+			content     string
+			expectParts int
+	}{
+			{
+					name:        "Invalid mode defaults to truncate",
+					mode:        "invalid_mode",
+					content:     strings.Repeat("a", DefaultMaxMessageSize * 2),
+					expectParts: 1,
+			},
+			{
+					name:        "Empty mode defaults to truncate",
+					mode:        "",
+					content:     strings.Repeat("a", DefaultMaxMessageSize * 2),
+					expectParts: 1,
+			},
+	}
+
+	for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+					cli := NewCLI()
+					cli.config.MessageMode = tc.mode
+					cli.config.MaxMessageSize = DefaultMaxMessageSize
+
+					messages := cli.splitMessage(tc.content)
+					if len(messages) != tc.expectParts {
+							t.Errorf("Expected %d parts, got %d", tc.expectParts, len(messages))
+					}
+
+					// Verify size limits
+					for i, msg := range messages {
+							if len(msg) > DefaultMaxMessageSize {
+									t.Errorf("Message part %d exceeds max size: %d > %d", 
+											i, len(msg), DefaultMaxMessageSize)
+							}
+					}
+			})
 	}
 }

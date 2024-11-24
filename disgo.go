@@ -39,6 +39,7 @@ type Config struct {
 	Debug         bool              `yaml:"debug"`
 	MaxMessageSize int    `yaml:"max_message_size"`
   MessageMode    string `yaml:"message_mode"`
+	ThreadName string `yaml:"thread_name"`
 	Passthrough bool `yaml:"passthrough"`
 }
 
@@ -46,6 +47,7 @@ type CLI struct {
 	config      Config
 	configFile  string
 	configPath  string
+	configName  string
 	token       string
 	channelID   string
 	serverID    string
@@ -59,19 +61,21 @@ type CLI struct {
 	stdinData   []byte
   maxMessageSize int
   messageMode    string
+	threadName string
 	flags       *flag.FlagSet
 }
 
 func NewCLI() *CLI {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
-		os.Exit(1)
+			fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
+			os.Exit(1)
 	}
 
 	cli := &CLI{
-		configPath: filepath.Join(homeDir, ".config", "godis"),
-		flags:      flag.NewFlagSet("godis", flag.ExitOnError),
+			configPath: filepath.Join(homeDir, ".config", "disgo"),
+			configName: "default",  
+			flags:      flag.NewFlagSet("disgo", flag.ExitOnError),
 	}
 
 	return cli
@@ -79,8 +83,8 @@ func NewCLI() *CLI {
 
 func (c *CLI) parseFlags(args []string) error {
 	// Define flags with long and short versions
-	c.flags.StringVar(&c.configFile, "config", "default.yaml", "Config file to use")
-	c.flags.StringVar(&c.configFile, "c", "default.yaml", "Config file to use (shorthand)")
+	c.flags.StringVar(&c.configName, "config", "default", "Config name to use (without .yaml extension)")
+	c.flags.StringVar(&c.configName, "c", "default", "Config name to use (shorthand)")
 	
 	c.flags.StringVar(&c.token, "token", "", "Discord bot token")
 	c.flags.StringVar(&c.token, "t", "", "Discord bot token (shorthand)")
@@ -106,6 +110,8 @@ func (c *CLI) parseFlags(args []string) error {
 
 	c.flags.IntVar(&c.maxMessageSize, "max-size", DefaultMaxMessageSize, "Maximum message size")
 	c.flags.StringVar(&c.messageMode, "message-mode", ModeSerialize, "Message handling mode (serialize|truncate)")
+
+	c.flags.StringVar(&c.threadName, "thread", "", "Create thread with given name for messages")
 
 	return c.flags.Parse(args)
 }
@@ -142,24 +148,33 @@ func (c *CLI) loadConfig() error {
 	// Ensure config directory exists
 	err := os.MkdirAll(c.configPath, 0755)
 	if err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+			return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Construct full config file path
+	configFile := filepath.Join(c.configPath, c.configName+".yaml")
+	
+	if c.config.Debug {
+			log.Printf("Loading config from: %s", configFile)
 	}
 
 	// Load config file
-	configFile := filepath.Join(c.configPath, c.configFile)
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			// Create default config if it doesn't exist
-			return c.createDefaultConfig(configFile)
-		}
-		return fmt.Errorf("failed to read config file: %w", err)
+			if os.IsNotExist(err) {
+					// Create default config if it doesn't exist
+					if c.config.Debug {
+							log.Printf("Config file does not exist, creating default: %s", configFile)
+					}
+					return c.createDefaultConfig(configFile)
+			}
+			return fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	// Parse YAML
 	err = yaml.Unmarshal(data, &c.config)
 	if err != nil {
-		return fmt.Errorf("failed to parse config file: %w", err)
+			return fmt.Errorf("failed to parse config file: %w", err)
 	}
 
 	return nil
@@ -170,7 +185,7 @@ func (c *CLI) createDefaultConfig(configFile string) error {
 			Token:        "",
 			ChannelID:    "",
 			ServerID:     "",
-			Username:     "godis-bot",
+			Username:     "disgo-bot",
 			Tags:         []string{},
 			TagMode:      "merge",
 			Properties:   map[string]string{},
@@ -178,6 +193,7 @@ func (c *CLI) createDefaultConfig(configFile string) error {
 			Debug:        false,
 			MaxMessageSize: DefaultMaxMessageSize,
 			MessageMode:    ModeSerialize,
+			ThreadName:    "",
 	}
 
 	data, err := yaml.Marshal(defaultConfig)
@@ -228,6 +244,10 @@ func (c *CLI) mergeFlags() {
 	}
 	if c.messageMode != "" {
 			c.config.MessageMode = c.messageMode
+	}
+
+	if c.threadName != "" {
+		c.config.ThreadName = c.threadName
 	}
 
 	// Handle tags with configured mode
@@ -293,101 +313,120 @@ func (c *CLI) sendToDiscord() error {
 			return fmt.Errorf("discord channel ID not configured")
 	}
 
-	// Ensure token has "Bot " prefix if not already present
+	if len(c.stdinData) == 0 {
+			return nil // Nothing to send
+	}
+
 	token := c.config.Token
 	if !strings.HasPrefix(token, "Bot ") {
 			token = "Bot " + token
 	}
 
-	if c.config.Debug {
-			log.Printf("Creating Discord session with token length: %d", len(c.config.Token))
-			log.Printf("Using channel ID: %s", c.config.ChannelID)
-	}
-
-	// Create Discord session
 	discord, err := discordgo.New(token)
 	if err != nil {
 			return fmt.Errorf("error creating Discord session: %w", err)
 	}
 	defer discord.Close()
 
-	// Verify the token by making a test API call
-	_, err = discord.User("@me")
-	if err != nil {
-			if strings.Contains(err.Error(), "401") {
-					return fmt.Errorf("invalid Discord token. Please check your configuration")
-			}
-			return fmt.Errorf("error verifying Discord token: %w", err)
-	}
+	content := string(c.stdinData)
+	messages := c.splitMessage(content)
 
 	if c.config.Debug {
-			log.Printf("Message length: %d", len(c.stdinData))
+			log.Printf("Splitting content of length %d into %d messages", len(content), len(messages))
 	}
 
-	if len(c.stdinData) > 0 {
-		content := string(c.stdinData)
-		messages := c.splitMessage(content)
+	var threadID string
 
-		if c.config.Debug {
-				log.Printf("Splitting content of length %d into %d messages", len(content), len(messages))
-		}
+	// If thread is requested, create it with a notification message
+	if c.config.ThreadName != "" {
+			// Send a compact thread starter message
+			threadStarter := fmt.Sprintf("📌 New thread: %s", c.config.ThreadName)
+			msg, err := discord.ChannelMessageSend(c.config.ChannelID, threadStarter)
+			if err != nil {
+					return fmt.Errorf("error sending thread starter: %w", err)
+			}
 
-		for i, msg := range messages {
-				if c.config.Debug {
-						log.Printf("Sending message part %d/%d (length: %d)", i+1, len(messages), len(msg))
-				}
+			// Create thread from the notification message
+			thread, err := discord.MessageThreadStart(c.config.ChannelID, msg.ID, c.config.ThreadName, 60)
+			if err != nil {
+					return fmt.Errorf("error creating thread: %w", err)
+			}
+			threadID = thread.ID
+					
+			if c.config.Debug {
+					log.Printf("Created thread: %s (%s)", thread.Name, thread.ID)
+					if c.threadName != "" {
+							log.Printf("Thread name from CLI flag")
+					} else {
+							log.Printf("Thread name from config")
+					}
+			}
+	}
 
-				_, err = discord.ChannelMessageSend(c.config.ChannelID, msg)
-				if err != nil {
-						return fmt.Errorf("error sending message part %d/%d: %w", i+1, len(messages), err)
-				}
-		}
+	// Send all messages in the appropriate channel/thread
+	for i, msg := range messages {
+			if c.config.Debug {
+					log.Printf("Sending message part %d/%d (length: %d)", i+1, len(messages), len(msg))
+			}
+
+			targetChannel := c.config.ChannelID
+			if threadID != "" {
+					targetChannel = threadID
+			}
+
+			_, err = discord.ChannelMessageSend(targetChannel, msg)
+			if err != nil {
+					return fmt.Errorf("error sending message part %d/%d: %w", i+1, len(messages), err)
+			}
 	}
 
 	return nil
-	}
-
-func (c *CLI) splitMessage(content string) []string {
-	if c.config.Debug {
-			log.Printf("Splitting message of length %d", len(content))
-	}
-
-	if len(content) <= c.config.MaxMessageSize {
-			if c.config.Debug {
-					log.Printf("Message is less than max size, not splitting")
-			}
-			return []string{content}
-	}
-
-	switch c.config.MessageMode {
-	case ModeTruncate:
-			return []string{content[:c.config.MaxMessageSize]}
-	case ModeSerialize:
-			var messages []string
-			remaining := content
-			for len(remaining) > 0 {
-					splitAt := c.config.MaxMessageSize
-					if len(remaining) < splitAt {
-							splitAt = len(remaining)
-					}
-
-					// Try to split at newline if possible
-					if splitAt < len(remaining) {
-							lastNewline := strings.LastIndex(remaining[:splitAt], "\n")
-							if lastNewline > 0 {
-									splitAt = lastNewline + 1
-							}
-					}
-
-					messages = append(messages, remaining[:splitAt])
-					remaining = remaining[splitAt:]
-			}
-			return messages
-	default:
-			// Default to truncate if invalid mode
-			return []string{content[:c.config.MaxMessageSize]}
-	}
 }
+
+	func (c *CLI) splitMessage(content string) []string {
+    maxSize := c.getEffectiveMaxMessageSize()
+    
+    if len(content) <= maxSize {
+        return []string{content}
+    }
+
+    switch c.config.MessageMode {
+    case ModeTruncate:
+        return []string{content[:maxSize]}
+    case ModeSerialize:
+        var messages []string
+        remaining := content
+        for len(remaining) > 0 {
+            splitAt := maxSize
+            if len(remaining) < splitAt {
+                splitAt = len(remaining)
+            }
+
+            // Try to split at newline if possible
+            if splitAt < len(remaining) {
+                lastNewline := strings.LastIndex(remaining[:splitAt], "\n")
+                if lastNewline > 0 {
+                    splitAt = lastNewline + 1
+                }
+            }
+
+            messages = append(messages, remaining[:splitAt])
+            remaining = remaining[splitAt:]
+        }
+        return messages
+    default:
+        // Default to truncate if invalid mode
+        return []string{content[:maxSize]}
+    }
+}
+
+func (c *CLI) getEffectiveMaxMessageSize() int {
+	if c.config.MaxMessageSize <= 0 {
+			return DefaultMaxMessageSize
+	}
+	return c.config.MaxMessageSize
+}
+
 
 func main() {
 	cli := NewCLI()
@@ -411,7 +450,7 @@ func main() {
 
 	
 	if cli.config.Debug {
-		  log.Printf("Starting godis...")
+		  log.Printf("Starting disgo...")
 			log.Printf("Debug logging enabled")
 			log.Printf("Using configuration:")
 			log.Printf("Token: %s", cli.config.Token)
