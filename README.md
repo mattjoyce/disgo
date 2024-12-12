@@ -14,13 +14,13 @@ A simple CLI tool for sending messages to Discord channels from the command line
 ## Installation
 
 ```bash
-go install github.com/yourusername/disgo@latest
+go install github.com/mattjoyce/disgo@latest
 ```
 
 Or clone and build:
 
 ```bash
-git clone https://github.com/yourusername/disgo.git
+git clone https://github.com/mattjoyce/disgo.git
 cd disgo
 go build -o disgo
 ```
