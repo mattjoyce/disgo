@@ -20,7 +20,7 @@ func TestNewCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get home directory: %v", err)
 	}
-	expectedPath := filepath.Join(homeDir, ".config", "godis")
+	expectedPath := filepath.Join(homeDir, ".config", "disgo")
 	if cli.configPath != expectedPath {
 		t.Errorf("Expected config path %s, got %s", expectedPath, cli.configPath)
 	}
@@ -28,7 +28,7 @@ func TestNewCLI(t *testing.T) {
 
 func TestLoadConfig(t *testing.T) {
 	// Create a temporary directory for testing
-	tmpDir, err := os.MkdirTemp("", "godis-test")
+	tmpDir, err := os.MkdirTemp("", "disgo-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestLoadConfig(t *testing.T) {
 	// Create a test CLI instance
 	cli := &CLI{
 		configPath: tmpDir,
-		configFile: "test-config.yaml",
+		configName: "test-config",
 	}
 
 	// Test loading non-existent config (should create default)
@@ -53,8 +53,8 @@ func TestLoadConfig(t *testing.T) {
 	}
 
 	// Test default values
-	if cli.config.Username != "godis-bot" {
-		t.Errorf("Expected default username 'godis-bot', got %s", cli.config.Username)
+	if cli.config.Username != "disgo-bot" {
+		t.Errorf("Expected default username 'disgo-bot', got %s", cli.config.Username)
 	}
 }
 
@@ -103,7 +103,7 @@ func TestParseFlags(t *testing.T) {
 			expected: CLI{
 				token:     "test-token",
 				channelID: "test-channel",
-				configFile: "default.yaml",
+				configName: "default",
 			},
 		},
 		{
@@ -112,7 +112,7 @@ func TestParseFlags(t *testing.T) {
 			expected: CLI{
 				token:     "test-token",
 				channelID: "test-channel",
-				configFile: "default.yaml",
+				configName: "default",
 			},
 		},
 	}
@@ -131,8 +131,8 @@ func TestParseFlags(t *testing.T) {
 			if cli.channelID != tc.expected.channelID {
 				t.Errorf("Expected channel %s, got %s", tc.expected.channelID, cli.channelID)
 			}
-			if cli.configFile != tc.expected.configFile {
-				t.Errorf("Expected config file %s, got %s", tc.expected.configFile, cli.configFile)
+			if cli.configName != tc.expected.configName {
+				t.Errorf("Expected config name %s, got %s", tc.expected.configName, cli.configName)
 			}
 		})
 	}

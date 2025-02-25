@@ -83,7 +83,7 @@ func NewCLI() *CLI {
 
 func (c *CLI) parseFlags(args []string) error {
 	// Define flags with long and short versions
-	c.flags.StringVar(&c.configName, "config", "default", "Config name to use (without .yaml extension)")
+	c.flags.StringVar(&c.configName, "config", "default", "Config name to use (stored in ~/.config/disgo/NAME.yaml)")
 	c.flags.StringVar(&c.configName, "c", "default", "Config name to use (shorthand)")
 	
 	c.flags.StringVar(&c.token, "token", "", "Discord bot token")
