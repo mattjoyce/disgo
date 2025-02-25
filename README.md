@@ -98,4 +98,4 @@ crontab -e
 
 ## License
 
-MIT
+GPL-3.0
