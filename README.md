@@ -1,100 +1,102 @@
 # Disgo
 
-Disgo is a simple command-line tool that sends data from stdin to a Discord channel. It's designed to be easy to use in Unix pipelines and shell scripts.
+A simple CLI tool for sending messages to Discord channels from the command line. Perfect for integrating Discord notifications into scripts and pipelines.
 
 ## Features
 
-- Send data from stdin to a Discord channel
-- Create Discord threads for message groups
-- Split long messages into smaller chunks
-- Add tags and properties to organize messages
-- Passthrough mode to echo stdin to stdout while also sending to Discord
-- Supports YAML configuration files
+- Pipe text content directly to Discord channels
+- Support for configuration files
+- Thread creation for long messages
+- Message handling modes for large content
+- Debug logging
+- Passthrough mode for testing
 
 ## Installation
 
 ```bash
-go install github.com/yourusername/disgo@latest
+go install github.com/mattjoyce/disgo@latest
 ```
 
-## Quick Start
+Or clone and build:
 
 ```bash
-# Send output from a command to Discord
-echo "Hello from disgo!" | disgo --token "your-discord-bot-token" --channel "your-channel-id"
+git clone https://github.com/mattjoyce/disgo.git
+cd disgo
+go build -o disgo
+```
 
-# Pipe log output to Discord
-tail -f /var/log/application.log | disgo --thread "Application Logs"
+## Setup
 
-# Send with tags for organization
-cat report.txt | disgo --tags "report,daily" --thread "Daily Reports"
+1. Create a Discord bot and get its token ([Discord Developer Portal](https://discord.com/developers/applications))
+2. Get your channel ID (Enable Developer Mode in Discord, right-click channel, Copy ID)
+3. Create or edit the config file at `~/.config/disgo/default.yaml`:
+
+```yaml
+token: "your-bot-token"
+channel_id: "your-channel-id"
+username: "disgo-bot"
+```
+
+## Usage
+
+Basic usage:
+```bash
+# Send a message
+echo "Hello Discord!" | disgo
+
+# Send with debug information
+echo "Hello Discord!" | disgo --debug
+
+# Use passthrough mode for testing
+echo "Test message" | disgo --passthrough
+
+# Create a thread for long content
+cat longfile.txt | disgo --thread "Long Content Thread"
+
+# Use a different config file
+echo "Using alt config" | disgo --config test1
 ```
 
 ## Configuration
 
-Disgo can be configured via command line flags or a YAML configuration file. Configuration files are stored in `~/.config/disgo/` with the extension `.yaml`.
-
-### Example Configuration File
-
-Create a file `~/.config/disgo/default.yaml`:
+Default configuration location: `~/.config/disgo/default.yaml`
 
 ```yaml
-token: "your-discord-bot-token"
-channel_id: "your-channel-id"
-server_id: "your-server-id"
-username: "disgo-bot"
-tags: ["log", "server"]
-tag_mode: "merge"
-properties:
-  env: "production"
-  region: "us-west"
-property_mode: "merge"
-debug: false
-max_message_size: 2000
-message_mode: "serialize"
-thread_name: ""
-passthrough: false
+token: ""                  # Discord bot token
+channel_id: ""            # Target channel ID
+server_id: ""             # Server ID (optional)
+username: "disgo-bot"     # Bot username
+debug: false              # Enable debug logging
+max_message_size: 2000    # Maximum message size
+message_mode: "serialize" # Message handling mode (serialize|truncate)
+thread_name: ""          # Default thread name (optional)
 ```
 
-### Command Line Options
+Multiple configuration files can be used by placing them in the `~/.config/disgo/` directory with a `.yaml` extension.
+
+## Message Handling
+
+Long messages (>2000 characters) are handled in two ways:
+
+- `serialize`: Splits the message into multiple parts (default)
+- `truncate`: Cuts off at the maximum length
+
+When using threads, the first message will be a thread notification, and the content will be posted within the thread.
+
+## Command Line Options
 
 ```
---config string        Config name to use (stored in ~/.config/disgo/NAME.yaml) (default "default")
--c string              Config name to use (shorthand) (default "default")
---token string         Discord bot token
--t string              Discord bot token (shorthand)
---channel string       Discord channel ID
--ch string             Discord channel ID (shorthand)
---server string        Discord server ID
--s string              Discord server ID (shorthand)
---username string      Bot username
--u string              Bot username (shorthand)
---tags string          Comma-separated tags
---tag-mode string      Tag handling mode (merge|replace) (default "merge")
---properties string    Properties in key:value;key2:value2 format
---property-mode string Property handling mode (merge|replace) (default "merge")
---debug                Enable debug logging
---passthrough          Echo stdin to stdout
---max-size int         Maximum message size (default 2000)
---message-mode string  Message handling mode (serialize|truncate) (default "serialize")
---thread string        Create thread with given name for messages
+  -c, --config string       Config name to use (without .yaml extension) (default "default")
+      --debug              Enable debug logging
+      --max-size int       Maximum message size (default 2000)
+      --message-mode string Message handling mode (serialize|truncate) (default "serialize")
+      --passthrough        Echo stdin to stdout
+      --thread string      Create thread with given name for messages
 ```
 
-## Using with Logs
+## Contributing
 
-Disgo is great for sending log output to Discord. Here are a few common patterns:
-
-```bash
-# Stream a log file
-tail -f /var/log/nginx/access.log | disgo --thread "Nginx Access Logs"
-
-# Filter logs and send only errors
-grep "ERROR" /var/log/application.log | disgo --tags "error,critical"
-
-# Send periodic reports
-crontab -e
-# Add: 0 8 * * * cat /var/log/daily-report.txt | disgo -c reports --thread "$(date +\%Y-\%m-\%d) Report"
-```
+Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
 ## License
 
